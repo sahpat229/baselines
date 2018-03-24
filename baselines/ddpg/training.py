@@ -174,7 +174,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                                 plt.savefig('infer/'+'test_'+str(epoch_episodes)+".png")
                                 plt.close()
 
-                            test_eval_obs, info = eval_env.reset()
+                            test_eval_obs, info = test_eval_env.reset()
                             test_eval_obs = np.concatenate((test_eval_obs['obs'].flatten(), test_eval_obs['weights']))
                             break
 
