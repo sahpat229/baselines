@@ -146,6 +146,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                             if render_eval and (epoch_episodes % 10 == 0):
                                 eval_env.render()
                                 plt.savefig('infer/'+str(epoch_episodes)+".png")
+                                plt.close()
 
                             eval_obs, info = eval_env.reset()
                             eval_obs = np.concatenate((eval_obs['obs'].flatten(), eval_obs['weights']))
