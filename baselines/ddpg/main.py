@@ -29,8 +29,8 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
 
     ######################################### DEFAULT DATA #######################################
     history, abbreviation = read_stock_history(filepath='utils/datasets/stocks_history_target.h5')
-    #history = history[:, :, :4]
-    #history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
+    history = history[:, :, :4]
+    history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
     target_stocks = abbreviation
     num_training_time = 1095
 
@@ -65,6 +65,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
                                   steps=test_history.shape[1]-window_length-2, 
                                   window_length=window_length)
     kwargs['nb_eval_steps'] = infer_train_env.steps    
+    kwargs['nb_eval_test_steps'] = infer_test_env.steps
 
     print("SPACE:", train_env.observation_space.shape)
 
@@ -105,7 +106,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
     # Disable logging for rank != 0 to avoid noise.
     if rank == 0:
         start_time = time.time()
-    training.train(env=train_env, eval_env=infer_train_env, 
+    training.train(env=train_env, train_eval_env=infer_train_env, test_eval_env=infer_test_env,
                    param_noise=param_noise, action_noise=action_noise, actor=actor, critic=critic, memory=memory, **kwargs)
     train_env.close()
     infer_train_env.close()
@@ -136,6 +137,7 @@ def parse_args():
     parser.add_argument('--nb-epoch-cycles', type=int, default=20)
     parser.add_argument('--nb-train-steps', type=int, default=50)  # per epoch cycle and MPI worker
     parser.add_argument('--nb-eval-steps', type=int, default=100)  # per epoch cycle and MPI worker
+    parser.add_argument('--nb-eval-test-steps', type=int, default=100)
     parser.add_argument('--nb-rollout-steps', type=int, default=100)  # per epoch cycle and MPI worker
     parser.add_argument('--noise-type', type=str, default='adaptive-param_0.2')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
     parser.add_argument('--num-timesteps', type=int, default=None)

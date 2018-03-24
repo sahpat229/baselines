@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, param_noise, actor, critic,
     normalize_returns, normalize_observations, critic_l2_reg, actor_lr, critic_lr, action_noise,
     popart, gamma, clip_norm, nb_train_steps, nb_rollout_steps, nb_eval_steps, batch_size, memory,
-    tau=0.01, eval_env=None, param_noise_adaption_interval=50, learning_steps=2, window_length=50):
+    tau=0.01, train_eval_env=None, test_eval_env=None, param_noise_adaption_interval=50, learning_steps=2, window_length=50):
     rank = MPI.COMM_WORLD.Get_rank()
 
     max_action = env.action_space.high
@@ -37,6 +37,8 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
     else:
         saver = None
 
+    eval_env = train_eval_env
+
     step = 0
     episode = 0
     eval_episode_rewards_history = deque(maxlen=100)
@@ -53,6 +55,11 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
         if eval_env is not None:
             eval_obs, info = eval_env.reset()
             eval_obs = np.concatenate((eval_obs['obs'].flatten(), eval_obs['weights']))
+
+        if test_eval_env is not None:
+            test_eval_obs, info = test_eval_env.reset()
+            test_eval_obs = np.concatenate((test_eval_obs['obs'].flatten(), test_eval_obs['weights']))
+
         done = False
         episode_reward = 0.
         episode_step = 0
@@ -154,6 +161,23 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                             eval_episode_rewards_history.append(eval_episode_reward)
                             eval_episode_reward = 0.
                             break
+                if test_eval_env is not None:
+                    for t_rollout in range(nb_eval_steps):
+                        #print("Evaling")
+                        test_eval_action, test_eval_q = agent.pi(test_eval_obs, apply_noise=False, compute_Q=True)
+                        test_eval_obs, eval_r, eval_done, eval_info = test_eval_env.step(max_action * test_eval_action)  # scale for execution in env (as far as DDPG is concerned, every action is in [-1, 1])
+                        test_eval_obs = np.concatenate((test_eval_obs['obs'].flatten(), test_eval_obs['weights']))
+
+                        if eval_done:
+                            if render_eval and (epoch_episodes % 10 == 0):
+                                test_eval_env.render()
+                                plt.savefig('infer/'+'test_'+str(epoch_episodes)+".png")
+                                plt.close()
+
+                            test_eval_obs, info = eval_env.reset()
+                            test_eval_obs = np.concatenate((test_eval_obs['obs'].flatten(), test_eval_obs['weights']))
+                            break
+
 
             mpi_size = MPI.COMM_WORLD.Get_size()
             # Log stats.
