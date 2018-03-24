@@ -11,14 +11,16 @@ import numpy as np
 import tensorflow as tf
 from mpi4py import MPI
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, param_noise, actor, critic,
     normalize_returns, normalize_observations, critic_l2_reg, actor_lr, critic_lr, action_noise,
     popart, gamma, clip_norm, nb_train_steps, nb_rollout_steps, nb_eval_steps, batch_size, memory,
-    tau=0.01, eval_env=None, param_noise_adaption_interval=50):
+    tau=0.01, eval_env=None, param_noise_adaption_interval=50, learning_steps=2, window_length=50):
     rank = MPI.COMM_WORLD.Get_rank()
 
-    assert (np.abs(env.action_space.low) == env.action_space.high).all()  # we assume symmetric actions.
     max_action = env.action_space.high
     logger.info('scaling actions by {} before executing in env'.format(max_action))
     agent = DDPG(actor, critic, memory, env.observation_space.shape, env.action_space.shape,
@@ -45,9 +47,12 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
         sess.graph.finalize()
 
         agent.reset()
-        obs = env.reset()
+        obs, info = env.reset()
+        #print("OBS:", obs)
+        obs = np.concatenate((obs['obs'].flatten(), obs['weights']))
         if eval_env is not None:
-            eval_obs = eval_env.reset()
+            eval_obs, info = eval_env.reset()
+            eval_obs = np.concatenate((eval_obs['obs'].flatten(), eval_obs['weights']))
         done = False
         episode_reward = 0.
         episode_step = 0
@@ -67,8 +72,10 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
         epoch_episodes = 0
         for epoch in range(nb_epochs):
             for cycle in range(nb_epoch_cycles):
+                #print("cycling")
                 # Perform rollouts.
                 for t_rollout in range(nb_rollout_steps):
+                    #print("rolling out")
                     # Predict next action.
                     action, q = agent.pi(obs, apply_noise=True, compute_Q=True)
                     assert action.shape == env.action_space.shape
@@ -77,7 +84,8 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                     if rank == 0 and render:
                         env.render()
                     assert max_action.shape == action.shape
-                    new_obs, r, done, info = env.step(max_action * action)  # scale for execution in env (as far as DDPG is concerned, every action is in [-1, 1])
+                    new_obs, r, done, info = env.step(action)  # scale for execution in env (as far as DDPG is concerned, every action is in [-1, 1])
+                    new_obs = np.concatenate((new_obs['obs'].flatten(), new_obs['weights']))
                     t += 1
                     if rank == 0 and render:
                         env.render()
@@ -101,13 +109,16 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                         episodes += 1
 
                         agent.reset()
-                        obs = env.reset()
-
+                        obs, info = env.reset()
+                        obs = np.concatenate((obs['obs'].flatten(), obs['weights']))
+                        break
+                
                 # Train.
                 epoch_actor_losses = []
                 epoch_critic_losses = []
                 epoch_adaptive_distances = []
                 for t_train in range(nb_train_steps):
+                    #print("training")
                     # Adapt param noise, if necessary.
                     if memory.nb_entries >= batch_size and t_train % param_noise_adaption_interval == 0:
                         distance = agent.adapt_param_noise()
@@ -124,18 +135,24 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                 if eval_env is not None:
                     eval_episode_reward = 0.
                     for t_rollout in range(nb_eval_steps):
+                        #print("Evaling")
                         eval_action, eval_q = agent.pi(eval_obs, apply_noise=False, compute_Q=True)
                         eval_obs, eval_r, eval_done, eval_info = eval_env.step(max_action * eval_action)  # scale for execution in env (as far as DDPG is concerned, every action is in [-1, 1])
-                        if render_eval:
-                            eval_env.render()
+                        eval_obs = np.concatenate((eval_obs['obs'].flatten(), eval_obs['weights']))
                         eval_episode_reward += eval_r
 
                         eval_qs.append(eval_q)
                         if eval_done:
-                            eval_obs = eval_env.reset()
+                            if render_eval and (epoch_episodes % 10 == 0):
+                                eval_env.render()
+                                plt.savefig('infer/'+str(epoch_episodes)+".png")
+
+                            eval_obs, info = eval_env.reset()
+                            eval_obs = np.concatenate((eval_obs['obs'].flatten(), eval_obs['weights']))
                             eval_episode_rewards.append(eval_episode_reward)
                             eval_episode_rewards_history.append(eval_episode_reward)
                             eval_episode_reward = 0.
+                            break
 
             mpi_size = MPI.COMM_WORLD.Get_size()
             # Log stats.
@@ -170,8 +187,8 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                     return x
                 else:
                     raise ValueError('expected scalar, got %s'%x)
-            combined_stats_sums = MPI.COMM_WORLD.allreduce(np.array([as_scalar(x) for x in combined_stats.values()]))
-            combined_stats = {k : v / mpi_size for (k,v) in zip(combined_stats.keys(), combined_stats_sums)}
+            # combined_stats_sums = MPI.COMM_WORLD.allreduce(np.array([as_scalar(x) for x in combined_stats.values()]))
+            # combined_stats = {k : v / mpi_size for (k,v) in zip(combined_stats.keys(), combined_stats_sums)}
 
             # Total statistics.
             combined_stats['total/epochs'] = epoch + 1

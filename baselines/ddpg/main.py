@@ -2,6 +2,9 @@ import argparse
 import time
 import os
 import logging
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
+
 from baselines import logger, bench
 from baselines.common.misc_util import (
     set_global_seeds,
@@ -11,6 +14,8 @@ import baselines.ddpg.training as training
 from baselines.ddpg.models import Actor, Critic
 from baselines.ddpg.memory import Memory
 from baselines.ddpg.noise import *
+from utils.data import read_stock_history, read_stock_history_csvs, normalize
+from portfolio import PortfolioEnv
 
 import gym
 import tensorflow as tf
@@ -22,21 +27,51 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
     if rank != 0:
         logger.set_level(logger.DISABLED)
 
-    # Create envs.
-    env = gym.make(env_id)
-    env = bench.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)))
+    ######################################### DEFAULT DATA #######################################
+    history, abbreviation = read_stock_history(filepath='utils/datasets/stocks_history_target.h5')
+    #history = history[:, :, :4]
+    #history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
+    target_stocks = abbreviation
+    num_training_time = 1095
 
-    if evaluation and rank==0:
-        eval_env = gym.make(env_id)
-        eval_env = bench.Monitor(eval_env, os.path.join(logger.get_dir(), 'gym_eval'))
-        env = bench.Monitor(env, None)
-    else:
-        eval_env = None
+    # get target history
+    target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
+    for i, stock in enumerate(target_stocks):
+        target_history[i] = history[abbreviation.index(stock), :num_training_time, :]
+    print("target:", target_history.shape)
+
+    testing_stocks = abbreviation
+    test_history = np.empty(shape=(len(testing_stocks), history.shape[1] - num_training_time,
+                                   history.shape[2]))
+    for i, stock in enumerate(testing_stocks):
+        test_history[i] = history[abbreviation.index(stock), num_training_time:, :]
+    print("test:", test_history.shape)
+
+    window_length = kwargs['window_length']
+    max_rollout_steps = kwargs['nb_rollout_steps']
+
+    ###############################################################################################
+
+    train_env = PortfolioEnv(target_history, 
+                             target_stocks, 
+                             steps=min(max_rollout_steps, target_history.shape[1]-window_length-2), 
+                             window_length=window_length)
+    infer_train_env = PortfolioEnv(target_history, 
+                                   target_stocks, 
+                                   steps=target_history.shape[1]-window_length-2,
+                                   window_length=window_length)
+    infer_test_env = PortfolioEnv(test_history, 
+                                  testing_stocks, 
+                                  steps=test_history.shape[1]-window_length-2, 
+                                  window_length=window_length)
+    kwargs['nb_eval_steps'] = infer_train_env.steps    
+
+    print("SPACE:", train_env.observation_space.shape)
 
     # Parse noise_type
     action_noise = None
     param_noise = None
-    nb_actions = env.action_space.shape[-1]
+    nb_actions = train_env.action_space.shape[-1]
     for current_noise_type in noise_type.split(','):
         current_noise_type = current_noise_type.strip()
         if current_noise_type == 'none':
@@ -54,27 +89,27 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
             raise RuntimeError('unknown noise type "{}"'.format(current_noise_type))
 
     # Configure components.
-    memory = Memory(limit=int(1e6), action_shape=env.action_space.shape, observation_shape=env.observation_space.shape)
-    critic = Critic(layer_norm=layer_norm)
-    actor = Actor(nb_actions, layer_norm=layer_norm)
+    memory = Memory(limit=int(1e6), action_shape=train_env.action_space.shape, observation_shape=train_env.observation_space.shape)
+    critic = Critic(nb_actions, layer_norm=layer_norm, asset_features_shape=train_env.asset_features_shape)
+    actor = Actor(nb_actions, layer_norm=layer_norm, asset_features_shape=train_env.asset_features_shape)
 
     # Seed everything to make things reproducible.
     seed = seed + 1000000 * rank
     logger.info('rank {}: seed={}, logdir={}'.format(rank, seed, logger.get_dir()))
     tf.reset_default_graph()
     set_global_seeds(seed)
-    env.seed(seed)
-    if eval_env is not None:
-        eval_env.seed(seed)
+    train_env.seed(seed)
+    infer_train_env.seed(seed)
+    infer_test_env.seed(seed)
 
     # Disable logging for rank != 0 to avoid noise.
     if rank == 0:
         start_time = time.time()
-    training.train(env=env, eval_env=eval_env, param_noise=param_noise,
-        action_noise=action_noise, actor=actor, critic=critic, memory=memory, **kwargs)
-    env.close()
-    if eval_env is not None:
-        eval_env.close()
+    training.train(env=train_env, eval_env=infer_train_env, 
+                   param_noise=param_noise, action_noise=action_noise, actor=actor, critic=critic, memory=memory, **kwargs)
+    train_env.close()
+    infer_train_env.close()
+    infer_test_env.close()
     if rank == 0:
         logger.info('total runtime: {}s'.format(time.time() - start_time))
 
@@ -104,6 +139,7 @@ def parse_args():
     parser.add_argument('--nb-rollout-steps', type=int, default=100)  # per epoch cycle and MPI worker
     parser.add_argument('--noise-type', type=str, default='adaptive-param_0.2')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
     parser.add_argument('--num-timesteps', type=int, default=None)
+    parser.add_argument('--window-length', type=int, default=3)
     boolean_flag(parser, 'evaluation', default=False)
     args = parser.parse_args()
     # we don't directly specify timesteps for this script, so make sure that if we do specify them
