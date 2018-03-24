@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 
 def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, param_noise, actor, critic,
     normalize_returns, normalize_observations, critic_l2_reg, actor_lr, critic_lr, action_noise,
-    popart, gamma, clip_norm, nb_train_steps, nb_rollout_steps, nb_eval_steps, batch_size, memory,
+    popart, gamma, clip_norm, nb_train_steps, nb_rollout_steps, nb_eval_steps, nb_eval_test_steps, batch_size, memory,
     tau=0.01, train_eval_env=None, test_eval_env=None, param_noise_adaption_interval=50, learning_steps=2, window_length=50):
     rank = MPI.COMM_WORLD.Get_rank()
 
@@ -162,7 +162,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                             eval_episode_reward = 0.
                             break
                 if test_eval_env is not None:
-                    for t_rollout in range(nb_eval_steps):
+                    for t_rollout in range(nb_eval_test_steps):
                         #print("Evaling")
                         test_eval_action, test_eval_q = agent.pi(test_eval_obs, apply_noise=False, compute_Q=True)
                         test_eval_obs, eval_r, eval_done, eval_info = test_eval_env.step(max_action * test_eval_action)  # scale for execution in env (as far as DDPG is concerned, every action is in [-1, 1])
