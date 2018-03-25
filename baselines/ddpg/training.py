@@ -139,7 +139,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                 # Evaluate.
                 eval_episode_rewards = []
                 eval_qs = []
-                if eval_env is not None:
+                if eval_env is not None and (epoch_episodes % 25 == 0):
                     eval_episode_reward = 0.
                     for t_rollout in range(nb_eval_steps):
                         #print("Evaling")
@@ -150,7 +150,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
 
                         eval_qs.append(eval_q)
                         if eval_done:
-                            if render_eval and (epoch_episodes % 10 == 0):
+                            if render_eval and (epoch_episodes % 25 == 0):
                                 eval_env.render()
                                 plt.savefig('infer/'+str(epoch_episodes)+".png")
                                 plt.close()
@@ -161,7 +161,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                             eval_episode_rewards_history.append(eval_episode_reward)
                             eval_episode_reward = 0.
                             break
-                if test_eval_env is not None:
+                if test_eval_env is not None and (epoch_episodes % 25 == 0):
                     for t_rollout in range(nb_eval_test_steps):
                         #print("Evaling")
                         test_eval_action, test_eval_q = agent.pi(test_eval_obs, apply_noise=False, compute_Q=True)
@@ -169,7 +169,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                         test_eval_obs = np.concatenate((test_eval_obs['obs'].flatten(), test_eval_obs['weights']))
 
                         if eval_done:
-                            if render_eval and (epoch_episodes % 10 == 0):
+                            if render_eval and (epoch_episodes % 25 == 0):
                                 test_eval_env.render()
                                 plt.savefig('infer/'+'test_'+str(epoch_episodes)+".png")
                                 plt.close()

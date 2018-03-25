@@ -28,7 +28,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
         logger.set_level(logger.DISABLED)
 
     ######################################### DEFAULT DATA #######################################
-    history, abbreviation = read_stock_history_csvs(filepath='utils/datasets/')
+    history, abbreviation = read_stock_history_csvs(csv_directory='utils/datasets/')
     history = history[:, :, :4]
     history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
     target_stocks = abbreviation
