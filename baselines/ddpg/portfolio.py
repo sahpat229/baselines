@@ -307,7 +307,7 @@ class PortfolioEnv(gym.Env):
             start_idx - The number of days from '2012-08-13' of the dataset
             sample_start_date - The start date sampling from the history
         """
-        plt.rcParams["figure.figsize"] = (20,20)
+        plt.rcParams["figure.figsize"] = (10,10)
         self.window_length = window_length
         self.num_stocks = history.shape[0]
         self.start_idx = start_idx

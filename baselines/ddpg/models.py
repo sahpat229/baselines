@@ -47,7 +47,7 @@ class Actor(Model):
             portfolio_inputs = tf.reshape(portfolio_inputs,
                                           [-1, self.nb_actions, 1, 1])
             x = tc.layers.conv2d(inputs=asset_inputs,
-                                 num_outputs=3,
+                                 num_outputs=20,
                                  kernel_size=[1, 3],
                                  padding='VALID',
                                  activation_fn=None)
@@ -99,7 +99,7 @@ class Critic(Model):
             portfolio_inputs = tf.reshape(portfolio_inputs,
                                           [-1, self.nb_actions, 1, 1])
             x = tc.layers.conv2d(inputs=asset_inputs,
-                                 num_outputs=3,
+                                 num_outputs=20,
                                  kernel_size=[1, 3],
                                  padding='VALID',
                                  activation_fn=None)
@@ -128,8 +128,8 @@ class Critic(Model):
             x = tf.nn.relu(x)
             x = tflearn.flatten(x)
 
-            t1 = tflearn.fully_connected(x, 16)
-            t2 = tflearn.fully_connected(action, 16)
+            t1 = tflearn.fully_connected(x, 24)
+            t2 = tflearn.fully_connected(action, 24)
 
             x = tf.add(t1, t2)
             if self.layer_norm:
