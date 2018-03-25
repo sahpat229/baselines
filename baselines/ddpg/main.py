@@ -31,7 +31,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
     history, abbreviation = read_stock_history(filepath='utils/datasets/stocks_history_target.h5')
     history = history[:, :, :4]
     history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
-    target_stocks = abbreviation
+    target_stocks = abbreviation[:4]
     num_training_time = 1095
 
     # get target history
@@ -40,7 +40,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
         target_history[i] = history[abbreviation.index(stock), :num_training_time, :]
     print("target:", target_history.shape)
 
-    testing_stocks = abbreviation
+    testing_stocks = abbreviation[:4]
     test_history = np.empty(shape=(len(testing_stocks), history.shape[1] - num_training_time,
                                    history.shape[2]))
     for i, stock in enumerate(testing_stocks):

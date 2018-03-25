@@ -47,7 +47,7 @@ class Actor(Model):
             portfolio_inputs = tf.reshape(portfolio_inputs,
                                           [-1, self.nb_actions, 1, 1])
             x = tc.layers.conv2d(inputs=asset_inputs,
-                                 num_outputs=32,
+                                 num_outputs=3,
                                  kernel_size=[1, 3],
                                  padding='VALID',
                                  activation_fn=None)
@@ -55,7 +55,7 @@ class Actor(Model):
                 x = tc.layers.layer_norm(x, center=True, scale=True)
             x = tf.nn.relu(x)
             x = tc.layers.conv2d(inputs=x,
-                                 num_outputs=32,
+                                 num_outputs=20,
                                  kernel_size=[1, determine_shape(input_amount=self.asset_features_shape[1],
                                                                  kernel_size=3,
                                                                  padding=0,
@@ -99,7 +99,7 @@ class Critic(Model):
             portfolio_inputs = tf.reshape(portfolio_inputs,
                                           [-1, self.nb_actions, 1, 1])
             x = tc.layers.conv2d(inputs=asset_inputs,
-                                 num_outputs=32,
+                                 num_outputs=3,
                                  kernel_size=[1, 3],
                                  padding='VALID',
                                  activation_fn=None)
@@ -107,7 +107,7 @@ class Critic(Model):
                 x = tc.layers.layer_norm(x, center=True, scale=True)
             x = tf.nn.relu(x)
             x = tc.layers.conv2d(inputs=x,
-                                 num_outputs=32,
+                                 num_outputs=20,
                                  kernel_size=[1, determine_shape(input_amount=self.asset_features_shape[1],
                                                                  kernel_size=3,
                                                                  padding=0,
@@ -128,8 +128,8 @@ class Critic(Model):
             x = tf.nn.relu(x)
             x = tflearn.flatten(x)
 
-            t1 = tflearn.fully_connected(x, 64)
-            t2 = tflearn.fully_connected(action, 64)
+            t1 = tflearn.fully_connected(x, 16)
+            t2 = tflearn.fully_connected(action, 16)
 
             x = tf.add(t1, t2)
             if self.layer_norm:

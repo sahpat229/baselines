@@ -141,7 +141,6 @@ class PortfolioSim(object):
 
         c1 = self.cost * (np.abs(w0[1:] - w1[1:])).sum()
         p1 = p0 * (1 - c1) * np.dot(y1, w1) # p_(t+1)''
-
         dw1 = (y1 * w1) / (np.dot(y1, w1) + eps)  # (eq7) weights evolve into
 
         # can't have negative holdings in this model (no shorts)
@@ -169,7 +168,8 @@ class PortfolioSim(object):
             "rate_of_return": rho1,
             "weights_mean": w1.mean(),
             "weights_std": w1.std(),
-            "cost": c1,
+            "cost": p0*c1,
+            "c1": c1,
             "weights": w1,
             "evolved_weights": dw1
         }
@@ -307,6 +307,7 @@ class PortfolioEnv(gym.Env):
             start_idx - The number of days from '2012-08-13' of the dataset
             sample_start_date - The start date sampling from the history
         """
+        plt.rcParams["figure.figsize"] = (20,3)
         self.window_length = window_length
         self.num_stocks = history.shape[0]
         self.start_idx = start_idx
@@ -414,7 +415,7 @@ class PortfolioEnv(gym.Env):
     def plot(self):
         #print("HERE")
         # show a plot of portfolio vs mean market performance
-        fig, axes = plt.subplots(nrows=3, ncols=1)
+        fig, axes = plt.subplots(nrows=4, ncols=1)
         df_info = pd.DataFrame(self.infos)
         df_info.index = df_info["date"]
         mdd = max_drawdown(df_info.rate_of_return + 1)
@@ -433,6 +434,11 @@ class PortfolioEnv(gym.Env):
         axes[2].set_ylabel('Action')
         for ind in range(allocations.shape[1]):
             axes[2].plot(allocations[:, ind])
+
+        costs = [info["cost"] for info in self.infos]
+        costs = np.cumsum(costs).flatten()
+        axes[3].set_ylabel('Cost')
+        axes[3].plot(costs)
         plt.show()
 
     def plot_costs(self):
