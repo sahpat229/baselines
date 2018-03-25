@@ -28,11 +28,11 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
         logger.set_level(logger.DISABLED)
 
     ######################################### DEFAULT DATA #######################################
-    history, abbreviation = read_stock_history_csvs(csv_directory='utils/datasets/')
+    history, abbreviation = read_stock_history(filepath='utils/datasets/stocks_history_target.h5')
     history = history[:, :, :4]
     history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
     target_stocks = abbreviation
-    num_training_time = int(history.shape[1] * 3 / 4)
+    num_training_time = 1095
 
     # get target history
     target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
