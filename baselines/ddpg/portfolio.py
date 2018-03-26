@@ -30,8 +30,12 @@ def obs_normalizer(observation):
     """
     if isinstance(observation, tuple):
         observation = observation[0]
+
+    divisor = observation[:, -1, 3]
+    divisor = divisor[:, None, None]
+    observation = observation[:, :, 1:4] / divisor
     # directly use close/open ratio as feature
-    observation = observation[:, :, 3:4] / observation[:, :, 0:1]
+    #observation = observation[:, :, 3:4] / observation[:, :, 0:1]
     observation = normalize(observation)
     return observation
 
@@ -328,10 +332,10 @@ class PortfolioEnv(gym.Env):
             0, 1, shape=len(self.src.asset_names) + 1)  # include cash
 
         # get the observation space from the data min and max
-        portfolio_obs_len = (len(self.src.asset_names) + 1) * window_length * 1
+        portfolio_obs_len = (len(self.src.asset_names) + 1) * window_length * 3
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=portfolio_obs_len +
                                                                                 len(self.src.asset_names) + 1)
-        self.asset_features_shape =[len(self.src.asset_names)+1, window_length, 1]
+        self.asset_features_shape =[len(self.src.asset_names)+1, window_length, 3]
 
     def seed(self, seed):
         np.random.seed(seed)
