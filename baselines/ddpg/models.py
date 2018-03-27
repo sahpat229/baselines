@@ -119,7 +119,7 @@ class Critic(Model):
             x = tf.nn.relu(x)
             x = tflearn.layers.merge_ops.merge([portfolio_inputs, x], 'concat', axis=-1)
             x = tc.layers.conv2d(inputs=x,
-                                 num_outputs=1,
+                                 num_outputs=20,
                                  kernel_size=[1, 1],
                                  padding='VALID',
                                  activation_fn=None)
@@ -128,8 +128,8 @@ class Critic(Model):
             x = tf.nn.relu(x)
             x = tflearn.flatten(x)
 
-            t1 = tflearn.fully_connected(x, 24)
-            t2 = tflearn.fully_connected(action, 24)
+            t1 = tflearn.fully_connected(x, 512)
+            t2 = tflearn.fully_connected(action, 512)
 
             x = tf.add(t1, t2)
             if self.layer_norm:
