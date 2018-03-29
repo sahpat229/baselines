@@ -47,6 +47,7 @@ class Memory(object):
         self.actions = RingBuffer(limit, shape=action_shape)
         self.rewards = RingBuffer(limit, shape=(1,))
         self.terminals1 = RingBuffer(limit, shape=(1,))
+        self.future_y_inputs = RingBuffer(limit, shape=action_shape)
         self.observations1 = RingBuffer(limit, shape=observation_shape)
 
     def sample(self, batch_size):
@@ -56,6 +57,7 @@ class Memory(object):
         obs0_batch = self.observations0.get_batch(batch_idxs)
         obs1_batch = self.observations1.get_batch(batch_idxs)
         action_batch = self.actions.get_batch(batch_idxs)
+        future_y_inputs_batch = self.future_y_inputs.get_batch(batch_idxs)
         reward_batch = self.rewards.get_batch(batch_idxs)
         terminal1_batch = self.terminals1.get_batch(batch_idxs)
 
@@ -64,16 +66,18 @@ class Memory(object):
             'obs1': array_min2d(obs1_batch),
             'rewards': array_min2d(reward_batch),
             'actions': array_min2d(action_batch),
+            'future_y_inputs': array_min2d(future_y_inputs_batch),
             'terminals1': array_min2d(terminal1_batch),
         }
         return result
 
-    def append(self, obs0, action, reward, obs1, terminal1, training=True):
+    def append(self, obs0, action, future_y_input, reward, obs1, terminal1, training=True):
         if not training:
             return
         
         self.observations0.append(obs0)
         self.actions.append(action)
+        self.future_y_inputs.append(future_y_input)
         self.rewards.append(reward)
         self.observations1.append(obs1)
         self.terminals1.append(terminal1)

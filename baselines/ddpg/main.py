@@ -1,4 +1,5 @@
 import argparse
+import numpy as np
 import time
 import os
 import logging
@@ -28,24 +29,50 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
         logger.set_level(logger.DISABLED)
 
     ######################################### DEFAULT DATA #######################################
-    history, abbreviation = read_stock_history(filepath='utils/datasets/stocks_history_target.h5')
-    history = history[:, :, :4]
-    history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
-    target_stocks = abbreviation
-    num_training_time = 1095
+    # history, abbreviation = read_stock_history(filepath='utils/datasets/stocks_history_target.h5')
+    # history = history[:, :, :4]
+    # history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
+    # target_stocks = abbreviation[:4]
+    # num_training_time = 1095
+
+    # # get target history
+    # target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
+    # for i, stock in enumerate(target_stocks):
+    #     target_history[i] = history[abbreviation.index(stock), :num_training_time, :]
+    # print("target:", target_history.shape)
+
+    # testing_stocks = abbreviation[:4]
+    # test_history = np.empty(shape=(len(testing_stocks), history.shape[1] - num_training_time,
+    #                                history.shape[2]))
+    # for i, stock in enumerate(testing_stocks):
+    #     test_history[i] = history[abbreviation.index(stock), num_training_time:, :]
+    # print("test:", test_history.shape)
+
+    history = np.load('history.pkl')
+    history = np.transpose(history, [1, 2, 0])
+    closes = history[:, :, 0]
+    opens = closes[:, :-1]
+    closes = closes[:, 1:]
+    history = np.stack((opens, history[:, 1:, 1], history[:, 1:, 2], closes), axis=-1)
+    print("sHAPE:", history.shape)
+
+    num_training_time = int(history.shape[1] * 8 / 9)
+    stocks = ['' for _ in range(history.shape[0])]
+    target_stocks = stocks
+    testing_stocks = stocks
 
     # get target history
     target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
     for i, stock in enumerate(target_stocks):
-        target_history[i] = history[abbreviation.index(stock), :num_training_time, :]
+        target_history[i] = history[i, :num_training_time, :]
     print("target:", target_history.shape)
 
-    testing_stocks = abbreviation
     test_history = np.empty(shape=(len(testing_stocks), history.shape[1] - num_training_time,
                                    history.shape[2]))
     for i, stock in enumerate(testing_stocks):
-        test_history[i] = history[abbreviation.index(stock), num_training_time:, :]
+        test_history[i] = history[i, num_training_time:, :]
     print("test:", test_history.shape)
+
 
     window_length = kwargs['window_length']
     max_rollout_steps = kwargs['nb_rollout_steps']
@@ -67,7 +94,8 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
     kwargs['nb_eval_steps'] = infer_train_env.steps    
     kwargs['nb_eval_test_steps'] = infer_test_env.steps
 
-    print("SPACE:", train_env.observation_space.shape)
+    print("OBS SPACE:", train_env.observation_space.shape)
+    print("ACTION SPACE:", train_env.action_space.shape)
 
     # Parse noise_type
     action_noise = None

@@ -31,9 +31,9 @@ def obs_normalizer(observation):
     if isinstance(observation, tuple):
         observation = observation[0]
 
-    divisor = observation[:, -1, 3]
+    divisor = observation[:, -1, -1]
     divisor = divisor[:, None, None]
-    observation = observation[:, :, 1:4] / divisor
+    observation = observation[:, :, 1:] / divisor
     # directly use close/open ratio as feature
     #observation = observation[:, :, 3:4] / observation[:, :, 0:1]
     observation = normalize(observation)
@@ -335,7 +335,7 @@ class PortfolioEnv(gym.Env):
         portfolio_obs_len = (len(self.src.asset_names) + 1) * window_length * 3
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=portfolio_obs_len +
                                                                                 len(self.src.asset_names) + 1)
-        self.asset_features_shape =[len(self.src.asset_names)+1, window_length, 3]
+        self.asset_features_shape =[len(self.src.asset_names) + 1, window_length, 3]
 
     def seed(self, seed):
         np.random.seed(seed)
@@ -386,11 +386,12 @@ class PortfolioEnv(gym.Env):
         info['date'] = index_to_date(self.start_idx + self.src.idx + self.src.step)
         info['steps'] = self.src.step
         info['next_obs'] = ground_truth_obs
-        info['next_y1'] = ground_truth_obs[:, -1, 3] / ground_truth_obs[:, -1, 0]
+        info['next_y1'] = ground_truth_obs[:, -1, 3] / ground_truth_obs[:, -1, 0] - 1
 
         self.infos.append(info)
 
-        observation = {'obs': obs_normalizer(observation), 'weights':  self.sim.w0}
+        #print("OBS SHAPE NEW:", obs_normalizer(observation))
+        observation = {'obs': obs_normalizer(observation), 'weights':  self.sim.w0 - 1}
 
         return observation, reward, done1 or done2, info
 
@@ -405,7 +406,8 @@ class PortfolioEnv(gym.Env):
         info = {}
         info['next_obs'] = ground_truth_obs
 
-        observation = {'obs': obs_normalizer(observation), 'weights': self.sim.w0}
+        #print("OBS SHAPE NEW:", obs_normalizer(observation))
+        observation = {'obs': obs_normalizer(observation), 'weights': self.sim.w0 - 1}
         return observation, info
 
     def _render(self, mode='human', close=False):

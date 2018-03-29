@@ -16,7 +16,6 @@ def normalize(x, stats):
         return x
     return (x - stats.mean) / stats.std
 
-
 def denormalize(x, stats):
     if stats is None:
         return x
@@ -74,6 +73,7 @@ class DDPG(object):
         self.actions = tf.placeholder(tf.float32, shape=(None,) + action_shape, name='actions')
         self.critic_target = tf.placeholder(tf.float32, shape=(None, 1), name='critic_target')
         self.param_noise_stddev = tf.placeholder(tf.float32, shape=(), name='param_noise_stddev')
+        self.future_y_inputs = tf.placeholder(tf.float32, shape=(None,) + action_shape, name='future_y_inputs')
 
         # Parameters.
         self.gamma = gamma
@@ -125,11 +125,14 @@ class DDPG(object):
 
         # Create networks and core TF parts that are shared across setup parts.
         self.actor_tf = actor(normalized_obs0)
-        self.normalized_critic_tf = critic(normalized_obs0, self.actions)
+        self.normalized_critic_tf, self.auxil = critic(normalized_obs0, self.actions)
         self.critic_tf = denormalize(tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
-        self.normalized_critic_with_actor_tf = critic(normalized_obs0, self.actor_tf, reuse=True)
+        self.normalized_critic_with_actor_tf, _ = critic(normalized_obs0, self.actor_tf, reuse=True)
         self.critic_with_actor_tf = denormalize(tf.clip_by_value(self.normalized_critic_with_actor_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
-        Q_obs1 = denormalize(target_critic(normalized_obs1, target_actor(normalized_obs1)), self.ret_rms)
+        target_action = target_actor(normalized_obs1)
+        target_critic_value, _ = target_critic(normalized_obs1, target_action)
+
+        Q_obs1 = denormalize(target_critic_value, self.ret_rms)
         self.target_Q = self.rewards + (1. - self.terminals1) * gamma * Q_obs1
 
         # Set up parts.
@@ -190,6 +193,8 @@ class DDPG(object):
                 weights_list=critic_reg_vars
             )
             self.critic_loss += critic_reg
+        self.additional_loss = 1e0*tf.reduce_mean(tf.reduce_sum(tf.square(self.auxil - self.future_y_inputs[:, 1:]), 1))
+        self.critic_loss += self.additional_loss
         critic_shapes = [var.get_shape().as_list() for var in self.critic.trainable_vars]
         critic_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in critic_shapes])
         logger.info('  critic shapes: {}'.format(critic_shapes))
@@ -271,9 +276,9 @@ class DDPG(object):
         action = np.clip(action, self.action_range[0], self.action_range[1])
         return action, q
 
-    def store_transition(self, obs0, action, reward, obs1, terminal1):
+    def store_transition(self, obs0, action, future_y_input, reward, obs1, terminal1):
         reward *= self.reward_scale
-        self.memory.append(obs0, action, reward, obs1, terminal1)
+        self.memory.append(obs0, action, future_y_input, reward, obs1, terminal1)
         if self.normalize_observations:
             self.obs_rms.update(np.array([obs0]))
 
@@ -310,16 +315,17 @@ class DDPG(object):
             })
 
         # Get all gradients and perform a synced update.
-        ops = [self.actor_grads, self.actor_loss, self.critic_grads, self.critic_loss]
-        actor_grads, actor_loss, critic_grads, critic_loss = self.sess.run(ops, feed_dict={
+        ops = [self.actor_grads, self.actor_loss, self.critic_grads, self.critic_loss, self.additional_loss]
+        actor_grads, actor_loss, critic_grads, critic_loss, add_loss = self.sess.run(ops, feed_dict={
             self.obs0: batch['obs0'],
             self.actions: batch['actions'],
             self.critic_target: target_Q,
+            self.future_y_inputs: batch['future_y_inputs']
         })
         self.actor_optimizer.update(actor_grads, stepsize=self.actor_lr)
         self.critic_optimizer.update(critic_grads, stepsize=self.critic_lr)
 
-        return critic_loss, actor_loss
+        return critic_loss, actor_loss, add_loss
 
     def initialize(self, sess):
         self.sess = sess
@@ -327,6 +333,7 @@ class DDPG(object):
         self.actor_optimizer.sync()
         self.critic_optimizer.sync()
         self.sess.run(self.target_init_updates)
+        self.writer = tf.summary.FileWriter('results/', self.sess.graph)
 
     def update_target_net(self):
         self.sess.run(self.target_soft_updates)
@@ -376,3 +383,16 @@ class DDPG(object):
             self.sess.run(self.perturb_policy_ops, feed_dict={
                 self.param_noise_stddev: self.param_noise.current_stddev,
             })
+
+    def build_summaries(self):
+        actor_loss = tf.Variable(0.)
+        tf.summary.scalar('actor_loss', actor_loss)
+        critic_loss = tf.Variable(0.)
+        tf.summary.scalar('critic_loss', critic_loss)
+        add_loss = tf.Variable(0.)
+        tf.summary.scalar('additional_loss', add_loss)
+
+        summary_vars = [actor_loss, critic_loss, add_loss]
+        summary_ops = tf.summary.merge_all()
+
+        return summary_ops, summary_vars

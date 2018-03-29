@@ -46,9 +46,11 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
     with U.single_threaded_session() as sess:
         # Prepare everything.
         agent.initialize(sess)
+        summary_ops, summary_vars = agent.build_summaries()
         sess.graph.finalize()
 
         agent.reset()
+
         obs, info = env.reset()
         #print("OBS:", obs)
         obs = np.concatenate((obs['obs'].flatten(), obs['weights']))
@@ -65,6 +67,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
         episode_step = 0
         episodes = 0
         t = 0
+        overall_t_train = 0
 
         epoch = 0
         start_time = time.time()
@@ -102,7 +105,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                     # Book-keeping.
                     epoch_actions.append(action)
                     epoch_qs.append(q)
-                    agent.store_transition(obs, action, r, new_obs, done)
+                    agent.store_transition(obs, action, info['next_y1'],r, new_obs, done)
                     obs = new_obs
 
                     if done:
@@ -131,7 +134,14 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                         distance = agent.adapt_param_noise()
                         epoch_adaptive_distances.append(distance)
 
-                    cl, al = agent.train()
+                    cl, al, add_loss = agent.train()
+                    summary = agent.sess.run(summary_ops, feed_dict={
+                                                summary_vars[0]: al,
+                                                summary_vars[1]: cl,
+                                                summary_vars[2]: add_loss
+                                            })
+                    agent.writer.add_summary(summary, overall_t_train)
+                    overall_t_train += 1
                     epoch_critic_losses.append(cl)
                     epoch_actor_losses.append(al)
                     agent.update_target_net()
@@ -139,7 +149,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                 # Evaluate.
                 eval_episode_rewards = []
                 eval_qs = []
-                if eval_env is not None and (epoch_episodes % 25 == 0):
+                if eval_env is not None and (epoch_episodes % 75 == 0):
                     eval_episode_reward = 0.
                     for t_rollout in range(nb_eval_steps):
                         #print("Evaling")
@@ -150,7 +160,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
 
                         eval_qs.append(eval_q)
                         if eval_done:
-                            if render_eval and (epoch_episodes % 25 == 0):
+                            if render_eval and (epoch_episodes % 75 == 0):
                                 eval_env.render()
                                 plt.savefig('infer/'+str(epoch_episodes)+".png")
                                 plt.close()
