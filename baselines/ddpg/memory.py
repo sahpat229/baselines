@@ -1,5 +1,7 @@
 import numpy as np
+import random
 
+from collections import deque
 
 class RingBuffer(object):
     def __init__(self, maxlen, shape, dtype='float32'):
@@ -85,3 +87,68 @@ class Memory(object):
     @property
     def nb_entries(self):
         return len(self.observations0)
+
+class ReplayBufferRollout(object):
+    def __init__(self, buffer_size, random_seed=123):
+        """
+        The right side of the deque contains the most recent experiences
+        """
+        self.buffer_size = buffer_size
+        self.count = 0
+        self.buffer = deque()
+        random.seed(random_seed)
+
+    @property
+    def nb_entries(self):
+        return len(self.buffer)
+    
+    def append(self, rollout):
+        experience = rollout
+        if self.count < self.buffer_size:
+            self.buffer.append(experience)
+            self.count += 1
+        else:
+            self.buffer.popleft()
+            self.buffer.append(experience)
+
+    def size(self):
+        return self.count
+
+    def sample(self, batch_size, gamma):
+        if self.count < batch_size:
+            batch = random.sample(self.buffer, self.count)
+        else:
+            batch = random.sample(self.buffer, batch_size)
+
+        s1_batch = np.array([exp[0] for exp in batch])
+        a1_batch = np.array([exp[1] for exp in batch])
+        s1y_batch = np.array([exp[4] for exp in batch])
+        sf_batch = np.array([exp[-1] for exp in batch])
+        t_batch = np.array([exp[-3] for exp in batch])
+
+        rs_batch = []
+        index = 2
+
+        while index < len(batch[0]):
+            rs_batch.append(np.array([exp[index] for exp in batch]))
+            index += 5
+
+        all_rs = np.zeros(batch_size)
+        for r_batch in reversed(rs_batch):
+            all_rs *= gamma
+            all_rs += r_batch
+
+        result = {
+            'obs0': array_min2d(s1_batch),
+            'obs1': array_min2d(sf_batch),
+            'rewards': array_min2d(all_rs),
+            'actions': array_min2d(a1_batch),
+            'future_y_inputs': array_min2d(s1y_batch),
+            'terminals1': array_min2d(t_batch),
+        }
+
+        return result
+
+    def clear(self):
+        self.buffer.clear()
+        self.count = 0

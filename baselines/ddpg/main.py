@@ -13,7 +13,7 @@ from baselines.common.misc_util import (
 )
 import baselines.ddpg.training as training
 from baselines.ddpg.models import Actor, Critic
-from baselines.ddpg.memory import Memory
+from baselines.ddpg.memory import Memory, ReplayBufferRollout
 from baselines.ddpg.noise import *
 from utils.data import read_stock_history, read_stock_history_csvs, normalize
 from portfolio import PortfolioEnv
@@ -22,6 +22,39 @@ import gym
 import tensorflow as tf
 from mpi4py import MPI
 
+
+def get_result_path(window_length, predictor_type, use_batch_norm, learning_steps=0, gamma=0.5,
+                    auxiliary_commission=0, auxiliary_prediction=0):
+    if use_batch_norm:
+        batch_norm_str = 'batch_norm'
+    else:
+        batch_norm_str = 'no_batch_norm'
+
+    learning_steps_str = 'learning_steps_'+str(learning_steps)
+    gamma_str = 'gamma_'+str(gamma)
+    auxiliary_str = 'auxil_commission_{}_auxil_prediction_{}'.format(str(auxiliary_commission), str(auxiliary_prediction))
+
+    #return 'results/stock/{}/window_{}/{}'.format(predictor_type, window_length, batch_norm_str)
+
+    return 'results/stock/{}/window_{}/{}/{}/{}/{}/'.format(predictor_type, window_length, batch_norm_str,
+                                                            learning_steps_str, gamma_str, auxiliary_str)
+
+def get_infer_path(window_length, predictor_type, use_batch_norm, learning_steps=0, gamma=0.5,
+                    auxiliary_commission=0, auxiliary_prediction=0):
+    if use_batch_norm:
+        batch_norm_str = 'batch_norm'
+    else:
+        batch_norm_str = 'no_batch_norm'
+
+    learning_steps_str = 'learning_steps_'+str(learning_steps)
+    gamma_str = 'gamma_'+str(gamma)
+    auxiliary_str = 'auxil_commission_{}_auxil_prediction_{}'.format(str(auxiliary_commission), str(auxiliary_prediction))
+
+    #return 'results/stock/{}/window_{}/{}'.format(predictor_type, window_length, batch_norm_str)
+
+    return 'infer/stock/{}/window_{}/{}/{}/{}/{}/'.format(predictor_type, window_length, batch_norm_str,
+                                                          learning_steps_str, gamma_str, auxiliary_str)
+
 def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
     # Configure things.
     rank = MPI.COMM_WORLD.Get_rank()
@@ -29,49 +62,49 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
         logger.set_level(logger.DISABLED)
 
     ######################################### DEFAULT DATA #######################################
-    # history, abbreviation = read_stock_history(filepath='utils/datasets/stocks_history_target.h5')
-    # history = history[:, :, :4]
-    # history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
-    # target_stocks = abbreviation[:4]
-    # num_training_time = 1095
-
-    # # get target history
-    # target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
-    # for i, stock in enumerate(target_stocks):
-    #     target_history[i] = history[abbreviation.index(stock), :num_training_time, :]
-    # print("target:", target_history.shape)
-
-    # testing_stocks = abbreviation[:4]
-    # test_history = np.empty(shape=(len(testing_stocks), history.shape[1] - num_training_time,
-    #                                history.shape[2]))
-    # for i, stock in enumerate(testing_stocks):
-    #     test_history[i] = history[abbreviation.index(stock), num_training_time:, :]
-    # print("test:", test_history.shape)
-
-    history = np.load('history.pkl')
-    history = np.transpose(history, [1, 2, 0])
-    closes = history[:, :, 0]
-    opens = closes[:, :-1]
-    closes = closes[:, 1:]
-    history = np.stack((opens, history[:, 1:, 1], history[:, 1:, 2], closes), axis=-1)
-    print("sHAPE:", history.shape)
-
-    num_training_time = int(history.shape[1] * 8 / 9)
-    stocks = ['' for _ in range(history.shape[0])]
-    target_stocks = stocks
-    testing_stocks = stocks
+    history, abbreviation = read_stock_history(filepath='utils/datasets/stocks_history_target.h5')
+    history = history[:, :, :4]
+    #history[:, 1:, 0] = history[:, 0:-1, 3] # correct opens
+    target_stocks = abbreviation[:4]
+    num_training_time = 1095
 
     # get target history
     target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
     for i, stock in enumerate(target_stocks):
-        target_history[i] = history[i, :num_training_time, :]
+        target_history[i] = history[abbreviation.index(stock), :num_training_time, :]
     print("target:", target_history.shape)
 
+    testing_stocks = abbreviation[:4]
     test_history = np.empty(shape=(len(testing_stocks), history.shape[1] - num_training_time,
                                    history.shape[2]))
     for i, stock in enumerate(testing_stocks):
-        test_history[i] = history[i, num_training_time:, :]
+        test_history[i] = history[abbreviation.index(stock), num_training_time:, :]
     print("test:", test_history.shape)
+
+    # history = np.load('history.pkl')
+    # history = np.transpose(history, [1, 2, 0])
+    # closes = history[:, :, 0]
+    # opens = closes[:, :-1]
+    # closes = closes[:, 1:]
+    # history = np.stack((opens, history[:, 1:, 1], history[:, 1:, 2], closes), axis=-1)
+    # print("sHAPE:", history.shape)
+
+    # num_training_time = int(history.shape[1] * 8 / 9)
+    # stocks = ['' for _ in range(history.shape[0])]
+    # target_stocks = stocks
+    # testing_stocks = stocks
+
+    # # get target history
+    # target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
+    # for i, stock in enumerate(target_stocks):
+    #     target_history[i] = history[i, :num_training_time, :]
+    # print("target:", target_history.shape)
+
+    # test_history = np.empty(shape=(len(testing_stocks), history.shape[1] - num_training_time,
+    #                                history.shape[2]))
+    # for i, stock in enumerate(testing_stocks):
+    #     test_history[i] = history[i, num_training_time:, :]
+    # print("test:", test_history.shape)
 
 
     window_length = kwargs['window_length']
@@ -119,6 +152,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
 
     # Configure components.
     memory = Memory(limit=int(1e6), action_shape=train_env.action_space.shape, observation_shape=train_env.observation_space.shape)
+    memory = ReplayBufferRollout(buffer_size=int(1e6))
     critic = Critic(nb_actions, layer_norm=layer_norm, asset_features_shape=train_env.asset_features_shape)
     actor = Actor(nb_actions, layer_norm=layer_norm, asset_features_shape=train_env.asset_features_shape)
 
@@ -170,7 +204,9 @@ def parse_args():
     parser.add_argument('--noise-type', type=str, default='adaptive-param_0.2')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
     parser.add_argument('--num-timesteps', type=int, default=None)
     parser.add_argument('--window-length', type=int, default=3)
+    parser.add_argument('--learning-steps', type=int, default=1)
     boolean_flag(parser, 'evaluation', default=False)
+    parser.add_argument('--eval-period', type=int, default=50)
     args = parser.parse_args()
     # we don't directly specify timesteps for this script, so make sure that if we do specify them
     # they agree with the other parameters

@@ -1,9 +1,10 @@
+import copy
 import os
 import time
 from collections import deque
 import pickle
 
-from baselines.ddpg.ddpg import DDPG
+from baselines.ddpg.ddpg import DDPG, clear_path
 import baselines.common.tf_util as U
 
 from baselines import logger
@@ -18,7 +19,8 @@ import matplotlib.pyplot as plt
 def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, param_noise, actor, critic,
     normalize_returns, normalize_observations, critic_l2_reg, actor_lr, critic_lr, action_noise,
     popart, gamma, clip_norm, nb_train_steps, nb_rollout_steps, nb_eval_steps, nb_eval_test_steps, batch_size, memory,
-    tau=0.01, train_eval_env=None, test_eval_env=None, param_noise_adaption_interval=50, learning_steps=2, window_length=50):
+    tau=0.01, train_eval_env=None, test_eval_env=None, param_noise_adaption_interval=50, learning_steps=1, window_length=50,
+    eval_period=50, infer_path='./infer/', summary_dir='./results/'):
     rank = MPI.COMM_WORLD.Get_rank()
 
     max_action = env.action_space.high
@@ -27,17 +29,26 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
         gamma=gamma, tau=tau, normalize_returns=normalize_returns, normalize_observations=normalize_observations,
         batch_size=batch_size, action_noise=action_noise, param_noise=param_noise, critic_l2_reg=critic_l2_reg,
         actor_lr=actor_lr, critic_lr=critic_lr, enable_popart=popart, clip_norm=clip_norm,
-        reward_scale=reward_scale)
+        reward_scale=reward_scale, learning_steps=learning_steps, summary_dir=summary_dir)
     logger.info('Using agent with the following configuration:')
     logger.info(str(agent.__dict__.items()))
+
+    if not os.path.exists(os.path.join(infer_path, 'train/')):
+        os.makedirs(os.path.join(infer_path, 'train/'), exist_ok=True)
+    else:
+        clear_path(os.path.join(infer_path, 'train/'))
+
+    if not os.path.exists(os.path.join(infer_path, 'test/')):
+        os.makedirs(os.path.join(infer_path, 'test/'), exist_ok=True)
+    else:
+        clear_path(os.path.join(infer_path, 'test/'))
+
 
     # Set up logging stuff only for a single worker.
     if rank == 0:
         saver = tf.train.Saver()
     else:
         saver = None
-
-    eval_env = train_eval_env
 
     step = 0
     episode = 0
@@ -46,198 +57,103 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
     with U.single_threaded_session() as sess:
         # Prepare everything.
         agent.initialize(sess)
-        summary_ops, summary_vars = agent.build_summaries()
+        train_summary_ops, train_summary_vars = agent.build_train_summaries()
+        episode_summary_ops, episode_summary_vars = agent.build_episode_summaries()
         sess.graph.finalize()
 
         agent.reset()
 
-        obs, info = env.reset()
-        #print("OBS:", obs)
-        obs = np.concatenate((obs['obs'].flatten(), obs['weights']))
-        if eval_env is not None:
-            eval_obs, info = eval_env.reset()
-            eval_obs = np.concatenate((eval_obs['obs'].flatten(), eval_obs['weights']))
-
-        if test_eval_env is not None:
-            test_eval_obs, info = test_eval_env.reset()
-            test_eval_obs = np.concatenate((test_eval_obs['obs'].flatten(), test_eval_obs['weights']))
-
-        done = False
-        episode_reward = 0.
-        episode_step = 0
-        episodes = 0
-        t = 0
         overall_t_train = 0
-
-        epoch = 0
-        start_time = time.time()
-
-        epoch_episode_rewards = []
-        epoch_episode_steps = []
-        epoch_episode_eval_rewards = []
-        epoch_episode_eval_steps = []
-        epoch_start_time = time.time()
-        epoch_actions = []
-        epoch_qs = []
-        epoch_episodes = 0
         for epoch in range(nb_epochs):
             for cycle in range(nb_epoch_cycles):
-                #print("cycling")
-                # Perform rollouts.
-                for t_rollout in range(nb_rollout_steps):
-                    #print("rolling out")
-                    # Predict next action.
+                episode_rollout = deque()
+
+                episode_reward = 0
+                obs, info = env.reset()
+                obs = np.concatenate((obs['obs'].flatten(), obs['weights']))
+
+                episode_rollout.append(obs)
+                for rollout_step in range(learning_steps - 1):
+                    obs = episode_rollout[-1]
                     action, q = agent.pi(obs, apply_noise=True, compute_Q=True)
-                    assert action.shape == env.action_space.shape
-
-                    # Execute next action.
-                    if rank == 0 and render:
-                        env.render()
-                    assert max_action.shape == action.shape
-                    new_obs, r, done, info = env.step(action)  # scale for execution in env (as far as DDPG is concerned, every action is in [-1, 1])
+                    new_obs, reward, done, info = env.step(action)
                     new_obs = np.concatenate((new_obs['obs'].flatten(), new_obs['weights']))
-                    t += 1
-                    if rank == 0 and render:
-                        env.render()
-                    episode_reward += r
-                    episode_step += 1
+                    [episode_rollout.append(item) for item in [action, reward, done, info['next_y1'], new_obs]]
+                    episode_reward += reward
 
-                    # Book-keeping.
-                    epoch_actions.append(action)
-                    epoch_qs.append(q)
-                    agent.store_transition(obs, action, info['next_y1'],r, new_obs, done)
-                    obs = new_obs
+                for t_rollout in range(nb_rollout_steps):
+                    #print("HERE:", episode_rollout[-1])
+                    action, q = agent.pi(episode_rollout[-1], apply_noise=True, compute_Q=True)
+                    new_obs, reward, done, info = env.step(action)
+                    new_obs = np.concatenate((new_obs['obs'].flatten(), new_obs['weights']))
+                    [episode_rollout.append(item) for item in [action, reward, done, info['next_y1'], new_obs]]
 
-                    if done:
-                        # Episode done.
-                        epoch_episode_rewards.append(episode_reward)
-                        episode_rewards_history.append(episode_reward)
-                        epoch_episode_steps.append(episode_step)
-                        episode_reward = 0.
-                        episode_step = 0
-                        epoch_episodes += 1
-                        episodes += 1
+                    agent.store_transition(copy.copy(episode_rollout))
+                    [episode_rollout.popleft() for _ in range(5)]
 
-                        agent.reset()
-                        obs, info = env.reset()
-                        obs = np.concatenate((obs['obs'].flatten(), obs['weights']))
+                    episode_reward += reward
+
+                    if done or t_rollout == nb_rollout_steps - 1:
+                        summary = sess.run(episode_summary_ops, feed_dict={
+                                episode_summary_vars[0]: episode_reward
+                            })
+                        agent.writer.add_summary(summary, epoch*nb_epoch_cycles + cycle)
+                        agent.writer.flush()
                         break
-                
-                # Train.
-                epoch_actor_losses = []
-                epoch_critic_losses = []
-                epoch_adaptive_distances = []
+
                 for t_train in range(nb_train_steps):
-                    #print("training")
-                    # Adapt param noise, if necessary.
                     if memory.nb_entries >= batch_size and t_train % param_noise_adaption_interval == 0:
                         distance = agent.adapt_param_noise()
-                        epoch_adaptive_distances.append(distance)
+                        #epoch_adaptive_distances.append(distance)
 
                     cl, al, add_loss = agent.train()
-                    summary = agent.sess.run(summary_ops, feed_dict={
-                                                summary_vars[0]: al,
-                                                summary_vars[1]: cl,
-                                                summary_vars[2]: add_loss
+                    summary = sess.run(train_summary_ops, feed_dict={
+                                                train_summary_vars[0]: al,
+                                                train_summary_vars[1]: cl,
+                                                train_summary_vars[2]: add_loss
                                             })
                     agent.writer.add_summary(summary, overall_t_train)
                     overall_t_train += 1
-                    epoch_critic_losses.append(cl)
-                    epoch_actor_losses.append(al)
-                    agent.update_target_net()
+                    #epoch_critic_losses.append(cl)
+                    #epoch_actor_losses.append(al)
+                    agent.update_target_net()                    
 
-                # Evaluate.
-                eval_episode_rewards = []
-                eval_qs = []
-                if eval_env is not None and (epoch_episodes % 75 == 0):
-                    eval_episode_reward = 0.
-                    for t_rollout in range(nb_eval_steps):
-                        #print("Evaling")
-                        eval_action, eval_q = agent.pi(eval_obs, apply_noise=False, compute_Q=True)
-                        eval_obs, eval_r, eval_done, eval_info = eval_env.step(max_action * eval_action)  # scale for execution in env (as far as DDPG is concerned, every action is in [-1, 1])
-                        eval_obs = np.concatenate((eval_obs['obs'].flatten(), eval_obs['weights']))
-                        eval_episode_reward += eval_r
+                if (epoch*nb_epoch_cycles + cycle) % eval_period == 0:
+                    # infer
+                    infer(agent, epoch*nb_epoch_cycles + cycle, train_eval_env, learning_steps, os.path.join(infer_path, 'train/'))
+                    infer(agent, epoch*nb_epoch_cycles + cycle, test_eval_env, learning_steps, os.path.join(infer_path, 'test/'))
 
-                        eval_qs.append(eval_q)
-                        if eval_done:
-                            if render_eval and (epoch_episodes % 75 == 0):
-                                eval_env.render()
-                                plt.savefig('infer/'+str(epoch_episodes)+".png")
-                                plt.close()
+def infer(agent, episode, env, learning_steps, save_path):
+    episode_rollout = deque()
+    obs, info = env.reset()
+    #print("OBS:", obs)
+    obs = np.concatenate((obs['obs'].flatten(), obs['weights']))
+    episode_rollout.append(obs)
 
-                            eval_obs, info = eval_env.reset()
-                            eval_obs = np.concatenate((eval_obs['obs'].flatten(), eval_obs['weights']))
-                            eval_episode_rewards.append(eval_episode_reward)
-                            eval_episode_rewards_history.append(eval_episode_reward)
-                            eval_episode_reward = 0.
-                            break
-                if test_eval_env is not None and (epoch_episodes % 25 == 0):
-                    for t_rollout in range(nb_eval_test_steps):
-                        #print("Evaling")
-                        test_eval_action, test_eval_q = agent.pi(test_eval_obs, apply_noise=False, compute_Q=True)
-                        test_eval_obs, eval_r, eval_done, eval_info = test_eval_env.step(max_action * test_eval_action)  # scale for execution in env (as far as DDPG is concerned, every action is in [-1, 1])
-                        test_eval_obs = np.concatenate((test_eval_obs['obs'].flatten(), test_eval_obs['weights']))
+    episode_reward = 0
 
-                        if eval_done:
-                            if render_eval and (epoch_episodes % 25 == 0):
-                                test_eval_env.render()
-                                plt.savefig('infer/'+'test_'+str(epoch_episodes)+".png")
-                                plt.close()
+    for rollout_step in range(learning_steps - 1):
+        obs = episode_rollout[-1]
+        action, _ = agent.pi(obs, apply_noise=False, compute_Q=False)
+        new_obs, reward, done, info = env.step(action)
+        new_obs = np.concatenate((new_obs['obs'].flatten(), new_obs['weights']))
+        [episode_rollout.append(item) for item in [action, reward, done, info['next_y1'], new_obs]]
+        episode_reward += reward
 
-                            test_eval_obs, info = test_eval_env.reset()
-                            test_eval_obs = np.concatenate((test_eval_obs['obs'].flatten(), test_eval_obs['weights']))
-                            break
+    for t_rollout in range(env.steps - learning_steps):
+        action, _ = agent.pi(episode_rollout[-1], apply_noise=False, compute_Q=False)
+        new_obs, reward, done, info = env.step(action)
+        new_obs = np.concatenate((new_obs['obs'].flatten(), new_obs['weights']))
+        [episode_rollout.append(item) for item in [action, reward, done, info['next_y1'], new_obs]]
 
+        agent.store_transition(copy.copy(episode_rollout))
+        [episode_rollout.popleft() for _ in range(5)]
 
-            mpi_size = MPI.COMM_WORLD.Get_size()
-            # Log stats.
-            # XXX shouldn't call np.mean on variable length lists
-            duration = time.time() - start_time
-            stats = agent.get_stats()
-            combined_stats = stats.copy()
-            combined_stats['rollout/return'] = np.mean(epoch_episode_rewards)
-            combined_stats['rollout/return_history'] = np.mean(episode_rewards_history)
-            combined_stats['rollout/episode_steps'] = np.mean(epoch_episode_steps)
-            combined_stats['rollout/actions_mean'] = np.mean(epoch_actions)
-            combined_stats['rollout/Q_mean'] = np.mean(epoch_qs)
-            combined_stats['train/loss_actor'] = np.mean(epoch_actor_losses)
-            combined_stats['train/loss_critic'] = np.mean(epoch_critic_losses)
-            combined_stats['train/param_noise_distance'] = np.mean(epoch_adaptive_distances)
-            combined_stats['total/duration'] = duration
-            combined_stats['total/steps_per_second'] = float(t) / float(duration)
-            combined_stats['total/episodes'] = episodes
-            combined_stats['rollout/episodes'] = epoch_episodes
-            combined_stats['rollout/actions_std'] = np.std(epoch_actions)
-            # Evaluation statistics.
-            if eval_env is not None:
-                combined_stats['eval/return'] = eval_episode_rewards
-                combined_stats['eval/return_history'] = np.mean(eval_episode_rewards_history)
-                combined_stats['eval/Q'] = eval_qs
-                combined_stats['eval/episodes'] = len(eval_episode_rewards)
-            def as_scalar(x):
-                if isinstance(x, np.ndarray):
-                    assert x.size == 1
-                    return x[0]
-                elif np.isscalar(x):
-                    return x
-                else:
-                    raise ValueError('expected scalar, got %s'%x)
-            # combined_stats_sums = MPI.COMM_WORLD.allreduce(np.array([as_scalar(x) for x in combined_stats.values()]))
-            # combined_stats = {k : v / mpi_size for (k,v) in zip(combined_stats.keys(), combined_stats_sums)}
+        episode_reward += reward
 
-            # Total statistics.
-            combined_stats['total/epochs'] = epoch + 1
-            combined_stats['total/steps'] = t
+        if done or t_rollout == env.steps - learning_steps - 1:
+            break
 
-            for key in sorted(combined_stats.keys()):
-                logger.record_tabular(key, combined_stats[key])
-            logger.dump_tabular()
-            logger.info('')
-            logdir = logger.get_dir()
-            if rank == 0 and logdir:
-                if hasattr(env, 'get_state'):
-                    with open(os.path.join(logdir, 'env_state.pkl'), 'wb') as f:
-                        pickle.dump(env.get_state(), f)
-                if eval_env and hasattr(eval_env, 'get_state'):
-                    with open(os.path.join(logdir, 'eval_env_state.pkl'), 'wb') as f:
-                        pickle.dump(eval_env.get_state(), f)
+    env.render()
+    plt.savefig(os.path.join(save_path, str(episode)+".png"))
+    plt.close()

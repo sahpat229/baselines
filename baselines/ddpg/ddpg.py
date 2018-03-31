@@ -4,6 +4,7 @@ from functools import reduce
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib as tc
+import os
 
 from baselines import logger
 from baselines.common.mpi_adam import MpiAdam
@@ -58,13 +59,23 @@ def get_perturbed_actor_updates(actor, perturbed_actor, param_noise_stddev):
     assert len(updates) == len(actor.vars)
     return tf.group(*updates)
 
+def clear_path(folder):
+    for file in os.listdir(folder):
+        file_path = os.path.join(folder, file)
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+            #elif os.path.isdir(file_path): shutil.rmtree(file_path)
+        except Exception as e:
+            print(e)
 
 class DDPG(object):
     def __init__(self, actor, critic, memory, observation_shape, action_shape, param_noise=None, action_noise=None,
         gamma=0.99, tau=0.001, normalize_returns=False, enable_popart=False, normalize_observations=True,
         batch_size=128, observation_range=(-5., 5.), action_range=(-1., 1.), return_range=(-np.inf, np.inf),
         adaptive_param_noise=True, adaptive_param_noise_policy_threshold=.1,
-        critic_l2_reg=0., actor_lr=1e-4, critic_lr=1e-3, clip_norm=None, reward_scale=1.):
+        critic_l2_reg=0., actor_lr=1e-4, critic_lr=1e-3, clip_norm=None, reward_scale=1., learning_steps=1,
+        summary_dir=None):
         # Inputs.
         self.obs0 = tf.placeholder(tf.float32, shape=(None,) + observation_shape, name='obs0')
         self.obs1 = tf.placeholder(tf.float32, shape=(None,) + observation_shape, name='obs1')
@@ -96,6 +107,13 @@ class DDPG(object):
         self.batch_size = batch_size
         self.stats_sample = None
         self.critic_l2_reg = critic_l2_reg
+        self.learning_steps = learning_steps
+        self.summary_dir = summary_dir
+
+        if not os.path.exists(self.summary_dir):
+            os.makedirs(self.summary_dir, exist_ok=True)
+        else:
+            clear_path(self.summary_dir)
 
         # Observation normalization.
         if self.normalize_observations:
@@ -125,7 +143,7 @@ class DDPG(object):
 
         # Create networks and core TF parts that are shared across setup parts.
         self.actor_tf = actor(normalized_obs0)
-        self.normalized_critic_tf, self.auxil = critic(normalized_obs0, self.actions)
+        self.normalized_critic_tf, self.critic_auxil_prediction = critic(normalized_obs0, self.actions)
         self.critic_tf = denormalize(tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
         self.normalized_critic_with_actor_tf, _ = critic(normalized_obs0, self.actor_tf, reuse=True)
         self.critic_with_actor_tf = denormalize(tf.clip_by_value(self.normalized_critic_with_actor_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
@@ -133,7 +151,7 @@ class DDPG(object):
         target_critic_value, _ = target_critic(normalized_obs1, target_action)
 
         Q_obs1 = denormalize(target_critic_value, self.ret_rms)
-        self.target_Q = self.rewards + (1. - self.terminals1) * gamma * Q_obs1
+        self.target_Q = self.rewards + (1. - self.terminals1) * (gamma**learning_steps) * Q_obs1
 
         # Set up parts.
         if self.param_noise is not None:
@@ -193,8 +211,8 @@ class DDPG(object):
                 weights_list=critic_reg_vars
             )
             self.critic_loss += critic_reg
-        self.additional_loss = 1e0*tf.reduce_mean(tf.reduce_sum(tf.square(self.auxil - self.future_y_inputs[:, 1:]), 1))
-        self.critic_loss += self.additional_loss
+        self.additional_loss = 1e0*tf.reduce_mean(tf.reduce_sum(tf.square(self.critic_auxil_prediction - self.future_y_inputs[:, 1:]), 1))
+        #self.critic_loss += self.additional_loss
         critic_shapes = [var.get_shape().as_list() for var in self.critic.trainable_vars]
         critic_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in critic_shapes])
         logger.info('  critic shapes: {}'.format(critic_shapes))
@@ -264,6 +282,7 @@ class DDPG(object):
             actor_tf = self.actor_tf
         feed_dict = {self.obs0: [obs]}
         if compute_Q:
+            #print("FEED DICT:", feed_dict)
             action, q = self.sess.run([actor_tf, self.critic_with_actor_tf], feed_dict=feed_dict)
         else:
             action = self.sess.run(actor_tf, feed_dict=feed_dict)
@@ -276,15 +295,18 @@ class DDPG(object):
         action = np.clip(action, self.action_range[0], self.action_range[1])
         return action, q
 
-    def store_transition(self, obs0, action, future_y_input, reward, obs1, terminal1):
-        reward *= self.reward_scale
-        self.memory.append(obs0, action, future_y_input, reward, obs1, terminal1)
+    def store_transition(self, episode_rollout):
+        #reward *= self.reward_scale
+        self.memory.append(episode_rollout)
         if self.normalize_observations:
-            self.obs_rms.update(np.array([obs0]))
+            self.obs_rms.update(np.array([episode_rollout[0]]))
 
     def train(self):
         # Get a batch.
-        batch = self.memory.sample(batch_size=self.batch_size)
+        batch = self.memory.sample(batch_size=self.batch_size, gamma=self.gamma)
+
+        rewards = batch['rewards']
+
 
         if self.normalize_returns and self.enable_popart:
             old_mean, old_std, target_Q = self.sess.run([self.ret_rms.mean, self.ret_rms.std, self.target_Q], feed_dict={
@@ -333,6 +355,7 @@ class DDPG(object):
         self.actor_optimizer.sync()
         self.critic_optimizer.sync()
         self.sess.run(self.target_init_updates)
+
         self.writer = tf.summary.FileWriter('results/', self.sess.graph)
 
     def update_target_net(self):
@@ -342,7 +365,7 @@ class DDPG(object):
         if self.stats_sample is None:
             # Get a sample and keep that fixed for all further computations.
             # This allows us to estimate the change in value for the same set of inputs.
-            self.stats_sample = self.memory.sample(batch_size=self.batch_size)
+            self.stats_sample = self.memory.sample(batch_size=self.batch_size, gamma=self.gamma)
         values = self.sess.run(self.stats_ops, feed_dict={
             self.obs0: self.stats_sample['obs0'],
             self.actions: self.stats_sample['actions'],
@@ -362,7 +385,7 @@ class DDPG(object):
             return 0.
 
         # Perturb a separate copy of the policy to adjust the scale for the next "real" perturbation.
-        batch = self.memory.sample(batch_size=self.batch_size)
+        batch = self.memory.sample(batch_size=self.batch_size, gamma=self.gamma)
         self.sess.run(self.perturb_adaptive_policy_ops, feed_dict={
             self.param_noise_stddev: self.param_noise.current_stddev,
         })
@@ -384,7 +407,7 @@ class DDPG(object):
                 self.param_noise_stddev: self.param_noise.current_stddev,
             })
 
-    def build_summaries(self):
+    def build_train_summaries(self):
         actor_loss = tf.Variable(0.)
         tf.summary.scalar('actor_loss', actor_loss)
         critic_loss = tf.Variable(0.)
@@ -394,5 +417,14 @@ class DDPG(object):
 
         summary_vars = [actor_loss, critic_loss, add_loss]
         summary_ops = tf.summary.merge_all()
+
+        return summary_ops, summary_vars
+
+    def build_episode_summaries(self):
+        ep_reward = tf.Variable(0.)
+        ep_reward_summary = tf.summary.scalar('episode_reward', ep_reward)
+
+        summary_vars = [ep_reward]
+        summary_ops = tf.summary.merge([ep_reward_summary])
 
         return summary_ops, summary_vars
