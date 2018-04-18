@@ -22,6 +22,7 @@ import gym
 import tensorflow as tf
 from mpi4py import MPI
 
+
 def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
     # Configure things.
     rank = MPI.COMM_WORLD.Get_rank()
@@ -48,18 +49,36 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
     #     test_history[i] = history[abbreviation.index(stock), num_training_time:, :]
     # print("test:", test_history.shape)
 
-    history = np.load('history.pkl')
-    history = np.transpose(history, [1, 2, 0])
-    closes = history[:, :, 0]
-    opens = closes[:, :-1]
-    closes = closes[:, 1:]
-    history = np.stack((opens, history[:, 1:, 1], history[:, 1:, 2], closes), axis=-1)
-    print("sHAPE:", history.shape)
+    ########################################## DOW JONES #########################################
+    history, abbreviation = read_stock_history_csvs(csv_directory='./utils/datasets/')
+    history = history[:, :, :4]
+    history[:, 1:, 0] = history[:, 0:-1, 3]  # correct opens
+    target_stocks = abbreviation
+    num_training_time = int(history.shape[1] * 3 / 4)
+
+    # get target history
+    target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
+    for i, stock in enumerate(target_stocks):
+        target_history[i] = history[abbreviation.index(stock), :num_training_time, :]
+
+    testing_stocks = abbreviation
+    test_history = np.empty(shape=(len(testing_stocks), history.shape[1] - num_training_time,
+                                   history.shape[2]))
+    for i, stock in enumerate(testing_stocks):
+        test_history[i] = history[abbreviation.index(stock), num_training_time:, :]
+
+    # history = np.load('history.pkl')
+    # history = np.transpose(history, [1, 2, 0])
+    # closes = history[:, :, 0]
+    # opens = closes[:, :-1]
+    # closes = closes[:, 1:]
+    # history = np.stack((opens, history[:, 1:, 1], history[:, 1:, 2], closes), axis=-1)
+    # print("sHAPE:", history.shape)
 
     num_training_time = int(history.shape[1] * 8 / 9)
-    stocks = ['' for _ in range(history.shape[0])]
-    target_stocks = stocks
-    testing_stocks = stocks
+    # stocks = ['' for _ in range(history.shape[0])]
+    # target_stocks = stocks
+    # testing_stocks = stocks
 
     # get target history
     target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
@@ -73,25 +92,24 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
         test_history[i] = history[i, num_training_time:, :]
     print("test:", test_history.shape)
 
-
     window_length = kwargs['window_length']
     max_rollout_steps = kwargs['nb_rollout_steps']
 
     ###############################################################################################
 
-    train_env = PortfolioEnv(target_history, 
-                             target_stocks, 
-                             steps=min(max_rollout_steps, target_history.shape[1]-window_length-2), 
+    train_env = PortfolioEnv(target_history,
+                             target_stocks,
+                             steps=min(max_rollout_steps, target_history.shape[1] - window_length - 2),
                              window_length=window_length)
-    infer_train_env = PortfolioEnv(target_history, 
-                                   target_stocks, 
-                                   steps=target_history.shape[1]-window_length-2,
+    infer_train_env = PortfolioEnv(target_history,
+                                   target_stocks,
+                                   steps=target_history.shape[1] - window_length - 2,
                                    window_length=window_length)
-    infer_test_env = PortfolioEnv(test_history, 
-                                  testing_stocks, 
-                                  steps=test_history.shape[1]-window_length-2, 
+    infer_test_env = PortfolioEnv(test_history,
+                                  testing_stocks,
+                                  steps=test_history.shape[1] - window_length - 2,
                                   window_length=window_length)
-    kwargs['nb_eval_steps'] = infer_train_env.steps    
+    kwargs['nb_eval_steps'] = infer_train_env.steps
     kwargs['nb_eval_test_steps'] = infer_test_env.steps
 
     print("OBS SPACE:", train_env.observation_space.shape)
