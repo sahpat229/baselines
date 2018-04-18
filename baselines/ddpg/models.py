@@ -4,8 +4,10 @@ import tensorflow.contrib as tc
 import tflearn
 import numpy as np
 
+
 def determine_shape(input_amount, kernel_size, padding, stride):
-    return int((input_amount - kernel_size + 2*padding)/stride + 1)
+    return int((input_amount - kernel_size + 2 * padding) / stride + 1)
+
 
 class Model(object):
     def __init__(self, name):
@@ -47,7 +49,7 @@ class Actor(Model):
                                       shape=[-1] + self.asset_features_shape)
             asset_inputs = asset_inputs[:, 1:, :, :]
             portfolio_inputs = tf.reshape(portfolio_inputs,
-                                          [-1, self.nb_actions-1, 1, 1])
+                                          [-1, self.nb_actions - 1, 1, 1])
             x = tc.layers.conv2d(inputs=asset_inputs,
                                  num_outputs=3,
                                  kernel_size=[1, 3],
@@ -68,8 +70,6 @@ class Actor(Model):
             if self.layer_norm:
                 x = tc.layers.layer_norm(x, center=True, scale=True)
             x = tf.nn.relu(x)
-
-
 
             x = tflearn.layers.merge_ops.merge([portfolio_inputs, x], 'concat', axis=-1)
             x = tc.layers.conv2d(inputs=x,
@@ -109,7 +109,7 @@ class Critic(Model):
                                       shape=[-1] + self.asset_features_shape)
             asset_inputs = asset_inputs[:, 1:, :, :]
             portfolio_inputs = tf.reshape(portfolio_inputs,
-                                          [-1, self.nb_actions-1, 1, 1])
+                                          [-1, self.nb_actions - 1, 1, 1])
             x = tc.layers.conv2d(inputs=asset_inputs,
                                  num_outputs=3,
                                  kernel_size=[1, 3],
@@ -129,7 +129,7 @@ class Critic(Model):
             if self.layer_norm:
                 x = tc.layers.layer_norm(x, center=True, scale=True)
             x = tf.nn.relu(x)
-            
+
             auxil = tc.layers.conv2d(inputs=x,
                                      num_outputs=1,
                                      kernel_size=[1, 1],
@@ -144,7 +144,7 @@ class Critic(Model):
                                  padding='VALID',
                                  activation_fn=None)
             x = x[:, :, 0, 0]
-            bias = tf.get_variable('bias_actor', [1, 1], dtype=tf.float32,
+            bias = tf.get_variable('bias_critic', [1, 1], dtype=tf.float32,
                                    initializer=tf.zeros_initializer)
             bias = tf.tile(bias, [tf.shape(x)[0], 1])
             x = tf.concat([bias, x], 1)

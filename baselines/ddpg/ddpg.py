@@ -194,7 +194,7 @@ class DDPG(object):
             )
             self.critic_loss += critic_reg
         self.additional_loss = 1e0*tf.reduce_mean(tf.reduce_sum(tf.square(self.auxil - self.future_y_inputs[:, 1:]), 1))
-        self.critic_loss += self.additional_loss
+        #self.critic_loss += self.additional_loss
         critic_shapes = [var.get_shape().as_list() for var in self.critic.trainable_vars]
         critic_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in critic_shapes])
         logger.info('  critic shapes: {}'.format(critic_shapes))
